@@ -22,20 +22,22 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 # ------------------------------------------------------------------------------
-# Runs a micro web server to listen for VictorOps webhook alerts.
-# Causes a Sonos player on the local network to play an alert sound
-# when an incident is created in your VictorOps account.
 #
-# Enable the notification webhook on your VictorOps settings pages.  The webhook
-# URL should be that of the server where this application is running.  For
-# example, http://alerts.mycompany.com/alert
+# This script was originally created by VictorOps and released under the MIT 
+# license.  It has been heavily modified for use on a Universal Devices ISY994i.
 #
-# Learn more about outgoing notifications on the VictorOps knowledge base:
-#     http://victorops.force.com/knowledgebase/articles/Getting_Started/WebHooks/
+# Runs a local micro web server (daemon) to listen for calls from an ISY device.
+# A call requests a Sonos player on the local network to play an alert sound
+# when triggered by the ISY and then return to playing music.  
+#
 #
 # Requires:
 #     SoCo     https://github.com/SoCo/SoCo
 #     Flask    https://github.com/mitsuhiko/flask
+#     URL      The sonos is told to retrieve a file from a URL to play.
+#              This may be an http source or a NAS or an nginx server running
+#              on the same server as this script. 
+#              (Serving static file via this script was painfully slow, avoid it)
 #
 # You may also find helpful:
 #     ngrok    https://ngrok.com/
@@ -52,25 +54,12 @@ import ConfigParser
 from soco import SoCo
 from flask import Flask
 from flask import request 
-#from flask import send_from_directory
 
 if len(sys.argv) < 2:
     print """
     USAGE: %s <config file>"
     """ % sys.argv[0]
 else:
-    # Calculate the expected signature of the notification received
-    # from VictorOps.
-    # def calcSig( parameters ):
-        # # Concatenate this webhook URL and the notification arguments
-        # buf = alertWebhookURL
-        # for key in sorted(parameters):
-            # buf += "%s%s" % (key, parameters[key])
-
-        # # Hash the alert details; base64 encode it
-        # hsh = hmac.new(alertWebhookAuthKey, buf, hashlib.sha1).digest()
-        # b64 = base64.b64encode(hsh)
-        # return b64
 
     # 0:03:18 -> 198
     def timeToInt( timeStr ):
@@ -84,47 +73,25 @@ else:
     # Read the config file
     config = ConfigParser.ConfigParser()
     config.read(sys.argv[1])
-    sonosPlayer = config.get('vo-sonos-alerts', 'sonosPlayer')
-    alertSoundURL = config.get('vo-sonos-alerts', 'alertSoundURL')
-    alertWebhookURL = config.get('vo-sonos-alerts', 'alertWebhookURLRoot')
-    alertWebhookAuthKey = config.get('vo-sonos-alerts', 'alertWebhookAuthKey')
-    listenPort = int(config.get('vo-sonos-alerts','listenPort'))
+    sonosPlayer = config.get('sonos-alerts', 'sonosPlayer')
+    alertSoundURL = config.get('sonos-alerts', 'alertSoundURL')
+    alertWebhookURL = config.get('sonos-alerts', 'alertWebhookURLRoot')
+    alertWebhookAuthKey = config.get('sonos-alerts', 'alertWebhookAuthKey')
+    listenPort = int(config.get('sonos-alerts','listenPort'))
 
     # Connect to the player
     sonos = None
 
-    sonos = SoCo("192.168.1.136")
+    sonos = SoCo(sonosPlayer)
     
-    #print 'Discovered sonos devices:%s' % list(soco.discover())    
-
-    # this doesn't work.  soco.discover() returns this:  [SoCo("192.168.1.136"), SoCo("192.168.1.148")]
-    # for zone in soco.discover():
-        # if zone.player_name == sonosPlayer:
-            # sonos = SoCo(zone.ip_address)
-            # break
-    # if sonos == None:
-        # print 'Player %s not found' % sonosPlayer
-        # print list(soco.discover())
-        # sys.exit(1)
-
     print 'Connected to Sonos %s' % sonosPlayer
     
-    # VictorOps will POST notification information to this path
+    # ISY will POST trigger this path
     app = Flask(__name__)
     @app.route('/doorbellpress', methods=['POST'])    
     def doorbellPress():    
-            # # Verify that the alert actually comes from VictorOps by getting
-            # # the signature header, calculating a signature locally and compare.
-            # if 'X-VictorOps-Signature' not in request.headers:
-              # # print 'No X-VictorOps-Signature header'
-              # # return "Nope"
 
-            # voSignature = request.headers['X-VictorOps-Signature']
-            # sig = calcSig(request.form)
-            # if sig != voSignature:
-              # # print "Signatures don't match"
-              # # return 'Nope'
-
+        #! debug
         #sonosAction = request.headers['SonosAction']
         print 'query string is %s' % request.query_string
         #print 'sonosaction is %s' % sonosAction
@@ -147,7 +114,7 @@ else:
             mediaMeta = mediaInfo['CurrentURIMetaData']
 
         # Play the alert sound, and sleep to allow it to play through
-        #???? consider setting volume level and then restoring it?
+        #???? to do: consider setting volume level and then restoring it?
         print 'Notifying sonos to play %s' % alertSoundURL
         sonos.play_uri(alertSoundURL)
         alertDuration = sonos.get_current_track_info()['duration']
@@ -167,13 +134,6 @@ else:
               sonos.play_uri(mediaURI, mediaMeta)
             
         return "OK"
-
-    # This method did NOT work.  VERY slow and caused the doorbellPress routine to timeout.  Switched to using nginx to serve the file.
-    # @app.route('/soundfile/<filename>', methods=("GET","POST"))
-    # def sendFile(filename):
-        # #soundFile = request.args.get('filename')
-        # print 'Play soundfile %s' % filename
-        # return send_from_directory('/usr/sonos/',filename)
         
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=listenPort, debug=True)
